@@ -1,0 +1,16 @@
+{
+  "name": "sanitize-secrets",
+  "owner": {
+    "name": "Mitchell van Wijngaarden"
+  },
+  "metadata": {
+    "description": "Redacts API keys and tokens from tool results and prompts before the model and the transcript keep them."
+  },
+  "plugins": [
+    {
+      "name": "sanitize-secrets",
+      "source": "./",
+      "description": "Redacts API keys and tokens from tool results and prompts before the model and the transcript keep them."
+    }
+  ]
+}

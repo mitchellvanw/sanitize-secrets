@@ -1,0 +1,9 @@
+{
+  "name": "sanitize-secrets",
+  "version": "0.1.0",
+  "description": "Redacts API keys and tokens from tool results and prompts before the model and the transcript keep them.",
+  "author": {
+    "name": "Mitchell van Wijngaarden"
+  },
+  "license": "MIT"
+}
