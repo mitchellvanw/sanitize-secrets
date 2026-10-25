@@ -4,13 +4,13 @@
     "name": "Mitchell van Wijngaarden"
   },
   "metadata": {
-    "description": "Redacts API keys and tokens from tool results and prompts before the model and the transcript keep them."
+    "description": "Redacts API keys and tokens from tool results and prompts, and lets the model use stored keys without reading them."
   },
   "plugins": [
     {
       "name": "sanitize-secrets",
       "source": "./",
-      "description": "Redacts API keys and tokens from tool results and prompts before the model and the transcript keep them."
+      "description": "Redacts API keys and tokens from tool results and prompts, and lets the model use stored keys without reading them."
     }
   ]
 }

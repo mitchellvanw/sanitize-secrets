@@ -1,3 +1,5 @@
+import { redactKnown } from './vault'
+
 // Known key and token formats. Each pattern starts at a word boundary, so an
 // ordinary word such as "task-management" does not match.
 const PATTERNS: readonly { kind: string; re: RegExp }[] = [
@@ -17,48 +19,52 @@ export type Block = { type: string; [field: string]: unknown }
 
 const WITHHELD = '[withheld: sanitize-secrets could not check this]'
 
-// Replaces each secret in `text` with its kind, and records the kind in `kinds`.
-export function redact(text: string, kinds: string[] = []): string {
+// Each spelling of a stored secret, with the name the model reads in its place.
+export type Known = readonly [string, string][]
+
+// Replaces each secret in `text` with its kind, and records the kind in `kinds`:
+// first the stored secrets by value, then the known formats.
+export function redact(text: string, kinds: string[] = [], known: Known = []): string {
   return PATTERNS.reduce(
     (out, { kind, re }) =>
       out.replace(re, () => {
         kinds.push(kind)
         return `[redacted: ${kind}]`
       }),
-    text,
+    redactKnown(text, known, kinds),
   )
 }
 
 // The kind of each secret `text` holds, one entry per match.
-export function secretKinds(text: string): string[] {
+export function secretKinds(text: string, known: Known = []): string[] {
   const kinds: string[] = []
-  redact(text, kinds)
+  redact(text, kinds, known)
   return kinds
 }
 
 // A content block with its text redacted: a text block, or the text of a tool
 // result, whether a string or the text blocks it holds. Other fields pass through.
-export function redactBlock(block: Block, kinds: string[]): Block {
+export function redactBlock(block: Block, kinds: string[], known: Known = []): Block {
   if (block.type === 'text' && typeof block.text === 'string') {
-    return { ...block, text: redact(block.text, kinds) }
+    return { ...block, text: redact(block.text, kinds, known) }
   }
 
   if (block.type === 'tool_result') {
     const { content } = block
 
-    if (typeof content === 'string') return { ...block, content: redact(content, kinds) }
-    if (Array.isArray(content)) return { ...block, content: content.map(b => redactBlock(b as Block, kinds)) }
+    if (typeof content === 'string') return { ...block, content: redact(content, kinds, known) }
+    if (Array.isArray(content)) return { ...block, content: content.map(b => redactBlock(b as Block, kinds, known)) }
   }
 
   return block
 }
 
 // Every string in a value, at any depth, redacted: a tool's structured record has no fixed shape.
-export function redactDeep(value: unknown, kinds: string[]): unknown {
-  if (typeof value === 'string') return redact(value, kinds)
-  if (Array.isArray(value)) return value.map(v => redactDeep(v, kinds))
+export function redactDeep(value: unknown, kinds: string[], known: Known = []): unknown {
+  if (typeof value === 'string') return redact(value, kinds, known)
+  if (Array.isArray(value)) return value.map(v => redactDeep(v, kinds, known))
   if (value !== null && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value).map(([key, v]) => [key, redactDeep(v, kinds)]))
+    return Object.fromEntries(Object.entries(value).map(([key, v]) => [key, redactDeep(v, kinds, known)]))
   }
 
   return value

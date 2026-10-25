@@ -1,11 +1,79 @@
 import type { Register } from 'claude-code'
-import { redactBlock, redactDeep, secretKinds, withhold } from './patterns'
+import { redact, redactBlock, redactDeep, secretKinds, withhold } from './patterns'
+import { checkRequest, parseVault, spellings, type Request, type Vault } from './vault'
 
-export const register: Register = on => {
+const TOOL = 'request'
+// Bodies past this are cut before the model reads them.
+const MAX_BODY = 100_000
+
+export const register: Register = (on, options) => {
+  // The stored secrets live here alone, in this module's memory: never in `$.state`, `$.store` or a file.
+  let vault: Vault = new Map()
+  let isVaultBroken = false
+  try {
+    vault = parseVault(options.vault as string | undefined)
+  } catch {
+    isVaultBroken = true
+  }
+  const known = spellings(vault)
+
+  if (vault.size > 0 || isVaultBroken) {
+    on('session.start', async ($, e, next) => {
+      const started = await next(e)
+
+      if (isVaultBroken) {
+        $.ui.toast(`${$.plugin.name}: the vault option is not valid JSON, so no stored secret can be used`)
+        return started
+      }
+
+      const listing = [...vault].map(([name, g]) => `- "${name}": ${g.hosts.join(', ')}`).join('\n')
+      await $.tool.register({
+        name: TOOL,
+        description: [
+          'Makes an HTTPS request with a stored secret attached. You never see the secret: the plugin adds it to the request and removes it from the response.',
+          'Each secret goes only to its own hosts:',
+          listing,
+          'Use this instead of putting a key in a Bash command, which is refused.',
+        ].join('\n'),
+        inputSchema: {
+          type: 'object',
+          properties: {
+            secret: { type: 'string', enum: [...vault.keys()] },
+            method: { type: 'string', enum: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'] },
+            url: { type: 'string', description: 'https://<host>/<path>, the host one of the secret\'s own' },
+            headers: { type: 'object', additionalProperties: { type: 'string' } },
+            body: { type: 'string' },
+          },
+          required: ['secret', 'url'],
+        },
+        isDeferred: false,
+      })
+
+      return started
+    })
+
+    // The request runs here, on the host: the model's call names the secret, never holds it.
+    on('tool.call', { tool: `mcp__sanitize-secrets__${TOOL}` }, async ($, e) => {
+      const checked = checkRequest(vault, e as unknown as Request)
+      if ('deny' in checked) return { deny: `${$.plugin.name}: ${checked.deny}` }
+
+      const res = await $.http.fetch(checked.url, checked.init)
+
+      const kinds: string[] = []
+      const body = res.text.length > MAX_BODY ? `${res.text.slice(0, MAX_BODY)}\n[cut at ${MAX_BODY} characters]` : res.text
+      const result = redactDeep({ status: res.status, headers: res.headers, body }, kinds, known)
+
+      if (kinds.length > 0) $.ui.toast(`Redacted ${kinds.length} secret${kinds.length === 1 ? '' : 's'} from a response: ${kinds.join(', ')}`)
+
+      // A plugin's tool answers text. It is written after the redaction, so JSON escaping cannot hide a secret from it.
+      return { result: JSON.stringify(result, null, 2) }
+    }).catch($ => ({ deny: `${$.plugin.name}: the request failed, so nothing is returned.` }))
+  }
+
   // A tool's answer, before the model reads it and before the transcript keeps its structured record.
   on('tool.call', async ($, e, next) => {
     if (e.tool === 'Bash') {
-      const kinds = secretKinds(e.command)
+      const kinds = secretKinds(e.command, known)
 
       // A command that holds a key would send it somewhere or write it down, so it does not run.
       if (kinds.length > 0) {
@@ -23,8 +91,8 @@ export const register: Register = on => {
     const kinds: string[] = []
     const answer = {
       ...ran,
-      text: redactDeep(ran.text, kinds) as typeof ran.text,
-      result: redactDeep(ran.result, kinds) as typeof ran.result,
+      text: redactDeep(ran.text, kinds, known) as typeof ran.text,
+      result: redactDeep(ran.result, kinds, known) as typeof ran.result,
     }
 
     if (kinds.length > 0) {
@@ -34,11 +102,37 @@ export const register: Register = on => {
     return answer
   }).catch($ => ({ deny: `${$.plugin.name}: its check failed, so this call's result is withheld.` }))
 
-  // The rows the model reads and the transcript keeps: what the person typed, and any tool result the hook above did not reach.
-  for (const door of ['tool-result', 'prompt'] as const) {
+  // What the person typed, before the prompt history and the queue record keep it.
+  // A slash command's line takes no rewrite here; its arguments are masked at command.run below.
+  on('prompt.submit', ($, e, next) => {
+    if (e.command !== undefined) return next(e)
+
+    const kinds: string[] = []
+    const text = redact(e.text, kinds, known)
+
+    if (kinds.length === 0) return next(e)
+
+    $.ui.toast(`Redacted ${kinds.length} secret${kinds.length === 1 ? '' : 's'} from your prompt: ${kinds.join(', ')}`)
+    return next({ ...e, text })
+  }).catch(($, e, next) => (next.called ? next(e) : { drop: `${$.plugin.name}: its check failed, so the prompt was not sent.` }))
+
+  // A slash command's arguments, before the command runs and before its rows and its history line keep them.
+  on('command.run', ($, e, next) => {
+    const kinds: string[] = []
+    const args = redact(e.args, kinds, known)
+
+    if (kinds.length === 0) return next(e)
+
+    $.ui.toast(`Redacted ${kinds.length} secret${kinds.length === 1 ? '' : 's'} from /${e.command}: ${kinds.join(', ')}`)
+    return next({ ...e, args })
+  }).catch(($, e, next) => (next.called ? next(e) : { text: `${$.plugin.name}: its check failed, so /${e.command} did not run.` }))
+
+  // The rows the model reads and the transcript keeps: what the person typed, a command's rows, a queued
+  // prompt's record, and any tool result the hook above did not reach.
+  for (const door of ['tool-result', 'prompt', 'command', 'queue'] as const) {
     on('session.append', { door }, ($, e, next) => {
       const kinds: string[] = []
-      const content = e.message.content.map(block => redactBlock(block, kinds))
+      const content = e.message.content.map(block => redactBlock(block, kinds, known))
 
       if (kinds.length === 0) return next(e)
 

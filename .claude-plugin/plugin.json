@@ -1,9 +1,19 @@
 {
   "name": "sanitize-secrets",
-  "version": "0.1.0",
-  "description": "Redacts API keys and tokens from tool results and prompts before the model and the transcript keep them.",
+  "version": "0.2.0",
+  "description": "Redacts API keys and tokens from tool results and prompts, and lets the model use stored keys without reading them.",
   "author": {
     "name": "Mitchell van Wijngaarden"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "userConfig": {
+    "vault": {
+      "type": "string",
+      "title": "Stored secrets",
+      "description": "JSON object of secrets the model may use without reading: {\"<name>\": {\"value\", \"hosts\": [...], \"header\", \"template\": \"Bearer {}\"}}. Set it with `claude plugin configure sanitize-secrets --values-stdin` in your own terminal.",
+      "sensitive": true,
+      "required": false,
+      "default": ""
+    }
+  }
 }

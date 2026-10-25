@@ -34,3 +34,36 @@ test("a tool's structured record is redacted, not only its text", async ($, on) 
   expect(answer.result).toEqual({ stdout: '[redacted: GitHub token]', stderr: '' })
   expect(answer.text).toBe('[redacted: GitHub token]')
 })
+
+test('a typed prompt is redacted before the history and the queue record keep it', async ($, on) => {
+  const arrived: string[] = []
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('prompt.submit', (_, e) => {
+    arrived.push(e.text)
+    return { text: e.text }
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+
+  await $.prompt.submit({ text: `my token is ${GITHUB}`, origin: { kind: 'composer' }, wait: false })
+
+  expect(arrived).toEqual(['my token is [redacted: GitHub token]'])
+})
+
+test("a slash command's arguments are redacted before it runs", async ($, on) => {
+  const arrived: string[] = []
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('command.run', (_, e) => {
+    arrived.push(e.args)
+    return { text: '' }
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+
+  await $.command.run({
+    command: 'note',
+    args: `remember ${GITHUB}`,
+    origin: { kind: 'composer' },
+    presentation: { isFullscreen: false, columns: 80 },
+  })
+
+  expect(arrived).toEqual(['remember [redacted: GitHub token]'])
+})
